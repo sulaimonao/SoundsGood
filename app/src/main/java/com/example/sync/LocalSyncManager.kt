@@ -1,5 +1,7 @@
 package com.example.sync
 
+import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import com.example.data.db.SyncedPlaylistEntity
 import com.example.data.db.SyncedPlaylistEntryEntity
@@ -83,7 +85,8 @@ data class SyncOutcome(
     val stopReason: String = "none",
     val reportDelivery: SyncReportDelivery? = null,
     val localReportSaved: Boolean = false,
-    val failures: List<SyncTrackResult> = emptyList()
+    val failures: List<SyncTrackResult> = emptyList(),
+    val reportId: String? = null
 )
 
 data class LocalSyncUiState(
@@ -98,7 +101,8 @@ data class LocalSyncUiState(
     val progress: SyncTransferProgress? = null,
     val lastOutcome: SyncOutcome? = null,
     val errorMessage: String? = null,
-    val requiresRePair: Boolean = false
+    val requiresRePair: Boolean = false,
+    val isFolderImport: Boolean = false
 ) {
     val isPaired: Boolean
         get() = pairedAddressDisplay != null
@@ -110,6 +114,15 @@ data class LocalSyncUiState(
         get() = phase == SyncPhase.SYNCING
 }
 
+data class MusicFolderState(
+    val selected: Boolean = false,
+    val displayName: String? = null,
+    val busy: Boolean = false,
+    val processed: Int = 0,
+    val skipped: Int = 0,
+    val message: String? = null
+)
+
 class LocalSyncManager(
     private val repository: LibraryRepository,
     private val fileStorage: SyncFileStorage,
@@ -117,6 +130,13 @@ class LocalSyncManager(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate
 ) {
+    private companion object { const val FOLDER_PREFS = "shared_music_folder" }
+    private val _musicFolderState = MutableStateFlow(MusicFolderState())
+    val musicFolderState: StateFlow<MusicFolderState> = _musicFolderState.asStateFlow()
+    @Volatile private var folderContext: Context? = null
+    @Volatile private var selectedTree: Uri? = null
+    private var musicFolderJob: Job? = null
+
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
 
     private val _uiState = MutableStateFlow(LocalSyncUiState())
@@ -127,6 +147,7 @@ class LocalSyncManager(
 
     @Volatile
     private var activeManifest: SyncManifest? = null
+    private var activeFolder: VerifiedTransferFolder? = null
 
     @Volatile
     private var operationGeneration: Long = 0L
@@ -138,6 +159,7 @@ class LocalSyncManager(
     private var cancellationMessage: String? = null
 
     init {
+        fileStorage.applicationContext?.let(::attachMusicFolder)
         scope.launch(ioDispatcher) {
             operationMutex.withLock {
                 fileStorage.cleanIncompleteStagingFiles()
@@ -152,7 +174,244 @@ class LocalSyncManager(
         }
     }
 
+    /** Called during manager construction when the production storage is created with an app context. */
+    fun attachMusicFolder(context: Context) {
+        if (folderContext != null) return
+        folderContext = context.applicationContext
+        val prefs = context.getSharedPreferences(FOLDER_PREFS, Context.MODE_PRIVATE)
+        selectedTree = prefs.getString("tree", null)?.let { Uri.parse(it) }
+        _musicFolderState.value = MusicFolderState(selected = selectedTree != null,
+            displayName = prefs.getString("name", null))
+    }
+
+    fun chooseMusicFolder(context: Context, tree: Uri) {
+        attachMusicFolder(context)
+        musicFolderWork {
+            val app = requireNotNull(folderContext)
+            val destination = DurableMusicFolder.open(app.contentResolver, tree, takeGrant = true)
+            currentCoroutineContext().ensureActive()
+            // Keep earlier grants: playback rows may still refer to the previously chosen folder.
+            if (!app.getSharedPreferences(FOLDER_PREFS, Context.MODE_PRIVATE).edit()
+                .putString("tree", destination.tree.toString()).putString("name", destination.displayName).commit()) {
+                throw SyncStorageException("Could not remember the selected music folder.")
+            }
+            selectedTree = destination.tree
+            _musicFolderState.update { it.copy(selected = true, displayName = destination.displayName) }
+            recoverFolder(destination)
+        }
+    }
+
+    fun recoverMusicFolder() = musicFolderWork { recoverFolder(requireNotNull(openMusicFolder())) }
+
+    fun migrateMusicFolder() = musicFolderWork {
+        val destination = requireNotNull(openMusicFolder())
+        val libraries = repository.getAllSyncedTracks().groupBy { it.syncLibraryId }
+        var playlistCount = 0
+        for ((id, tracks) in libraries) {
+            currentCoroutineContext().ensureActive()
+            if (id == null || !SyncManifestValidator.ID_REGEX.matches(id)) {
+                _musicFolderState.update { it.copy(skipped = it.skipped + tracks.size) }
+                continue
+            }
+            val lists = repository.getSyncedPlaylistsForLibrary(id)
+            val name = lists.firstOrNull()?.libraryName ?: id
+            val revision = lists.maxByOrNull { it.syncedAtMs }?.revision ?: "local_migration"
+            val copied = HashMap<String, String>()
+            for (old in tracks) {
+                currentCoroutineContext().ensureActive()
+                val track = migrationTrack(old)
+                if (track == null || old.trackKey != SyncManifestValidator.stableTrackKey(id, track.id)) {
+                    _musicFolderState.update { it.copy(skipped = it.skipped + 1) }
+                    continue
+                }
+                val shared = destination.reuseVerified(id, name, revision, track)
+                val privateCopy = fileStorage.ownedPrivateAudio(old.localFilePath)
+                var temporary: File? = null
+                try {
+                    val source = when {
+                        shared != null -> null
+                        privateCopy != null && fileStorage.verifyExistingFile(privateCopy, track.sizeBytes, track.sha256) -> privateCopy
+                        else -> {
+                            val uri = Uri.parse(old.contentUri)
+                            if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority != "com.android.externalstorage.documents") null
+                            else {
+                                if (fileStorage.availableStorageBytes() < track.sizeBytes + 4L * 1024 * 1024) {
+                                    throw SyncStorageException("Not enough space for a verified migration copy.", reason = "storage_full")
+                                }
+                                val part = fileStorage.newStagingPartFile()
+                                temporary = part
+                                if (copyReadableSharedTrack(uri, track, part)) part else null
+                            }
+                        }
+                    }
+                    if (source == null && shared == null) {
+                        _musicFolderState.update { it.copy(skipped = it.skipped + 1) }
+                        continue
+                    }
+                    val uri = shared ?: destination.store(id, name, revision, track, requireNotNull(source))
+                    currentCoroutineContext().ensureActive()
+                    withContext(NonCancellable) {
+                        repository.commitSyncedLibraryBatch(listOf(old.copy(contentUri = uri.toString(),
+                            albumArtUri = uri.toString(), localFilePath = null, isMissingOrUnreadable = false,
+                            lastError = null)), emptyList(), emptyMap())
+                        copied[old.trackKey] = track.id
+                        _musicFolderState.update { it.copy(processed = it.processed + 1) }
+                    }
+                } finally {
+                    temporary?.let(fileStorage::deletePartFileQuietly)
+                }
+            }
+            for (list in lists) {
+                currentCoroutineContext().ensureActive()
+                val rows = repository.getSyncedPlaylistEntries(list.playlistKey)
+                val ids = rows.mapNotNull { copied[it.trackKey] }
+                if (ids.size == rows.size) {
+                    destination.storePlaylist(id, list.libraryName, list.revision, SyncPlaylistDto(list.remotePlaylistId, list.name, ids))
+                    playlistCount++
+                }
+            }
+        }
+        "Migration finished. Verified tracks now play from this folder. $playlistCount playlists saved. Earlier files were kept."
+    }
+
+    private fun migrationTrack(old: TrackEntity): SyncTrackDto? {
+        val id = old.syncTrackId ?: return null
+        val hash = old.contentSha256 ?: return null
+        val filename = old.localFilePath ?: Uri.parse(old.contentUri).lastPathSegment ?: ""
+        val ext = filename.substringAfterLast('.', "").lowercase()
+        val mime = SyncManifestValidator.ALLOWED_EXTENSION_MIME_PAIRS[ext] ?: return null
+        if (mime != old.mimeType || !SyncManifestValidator.ID_REGEX.matches(id) ||
+            !SyncManifestValidator.SHA256_REGEX.matches(hash) || old.sizeBytes !in 0L..SyncManifestValidator.MAX_AUDIO_FILE_BYTES) return null
+        return SyncTrackDto(id, old.title, old.artist, old.album, old.genre, old.durationMs, old.sizeBytes, hash, mime, ext)
+    }
+
+    private suspend fun copyReadableSharedTrack(uri: Uri, track: SyncTrackDto, out: File): Boolean {
+        val context = currentCoroutineContext()
+        val resolver = requireNotNull(folderContext).contentResolver
+        val stream = try { resolver.openInputStream(uri) } catch (_: java.io.FileNotFoundException) { return false }
+            catch (_: SecurityException) { return false }
+        if (stream == null) return false
+        return try {
+            stream.use { input ->
+                out.outputStream().use { output ->
+                    TransferFolderBytes.copyVerified(input, output, track.sizeBytes, track.sha256,
+                        { context.ensureActive() }, { })
+                }
+            }
+            true
+        } catch (e: TransferFolderBytes.CopyFailure) {
+            if (e.kind == TransferFolderBytes.Failure.DESTINATION_WRITE) throw SyncStorageException("Could not stage a shared track.", e)
+            false
+        }
+    }
+
+    private suspend fun recoverFolder(destination: DurableMusicFolder): String {
+        val existing = repository.getAllSyncedTracks().associateBy { it.trackKey }
+        val available = HashSet<String>()
+        val priorPlaylists = HashMap<String, Map<String, SyncedPlaylistEntity>>()
+        var playlists = 0
+        var protectedTracks = 0
+        var protectedPlaylists = 0
+        val result = destination.recover(
+            onTrack = { libraryId, _, _, track, uri ->
+                val key = SyncManifestValidator.stableTrackKey(libraryId, track.id)
+                val old = existing[key]
+                if (old != null && old.contentSha256 != track.sha256) {
+                    // A folder chosen on an existing installation may carry a different revision.
+                    protectedTracks++
+                } else {
+                    val row = trackEntity(libraryId, track, uri, null, old)
+                    withContext(NonCancellable) {
+                        repository.commitSyncedLibraryBatch(listOf(row), emptyList(), emptyMap())
+                        available += key
+                        _musicFolderState.update { it.copy(processed = it.processed + 1) }
+                    }
+                }
+            },
+            onPlaylist = { libraryId, name, revision, list ->
+                val key = SyncManifestValidator.stablePlaylistKey(libraryId, list.id)
+                val entries = list.trackIds.mapIndexed { position, id ->
+                    SyncedPlaylistEntryEntity(key, position, SyncManifestValidator.stableTrackKey(libraryId, id))
+                }
+                val prior = priorPlaylists.getOrPut(libraryId) {
+                    repository.getSyncedPlaylistsForLibrary(libraryId).associateBy { it.playlistKey }
+                }[key]
+                val wouldReplaceDifferentRevision = prior != null && prior.revision != revision &&
+                    (prior.name != list.name || repository.getSyncedPlaylistEntries(key).map { it.trackKey } != entries.map { it.trackKey })
+                if (!wouldReplaceDifferentRevision && entries.all { it.trackKey in available }) {
+                    val entity = SyncedPlaylistEntity(key, libraryId, name, list.id, list.name, revision, System.currentTimeMillis())
+                    repository.commitSyncedLibraryBatch(emptyList(), listOf(entity), mapOf(key to entries))
+                    playlists++
+                } else protectedPlaylists++
+            }
+        )
+        _musicFolderState.update { it.copy(skipped = result.skipped + protectedTracks) }
+        return "Folder ready. Recovered $playlists playlists. Skipped ${result.playlistsSkipped + protectedPlaylists} incomplete or conflicting playlists."
+    }
+
+    fun cancelMusicFolderWork() {
+        musicFolderJob?.cancel()
+    }
+
+    private fun musicFolderWork(block: suspend () -> String) {
+        val initial = _musicFolderState.value
+        if (_uiState.value.isConnectingOrSyncing || initial.busy ||
+            !_musicFolderState.compareAndSet(initial, initial.copy(busy = true, processed = 0, skipped = 0, message = null))) return
+        previewJob?.cancel()
+        selectionGeneration++
+        musicFolderJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val message = try {
+                operationMutex.withLock { withContext(ioDispatcher) { block() } }
+            } catch (cancelled: CancellationException) {
+                "Folder operation cancelled. Completed tracks were kept."
+            } catch (error: Exception) {
+                "Folder operation stopped. Check free space and select the local music folder again. Completed tracks were kept."
+            }
+            _musicFolderState.update { it.copy(busy = false, message = message) }
+            activeManifest?.let { recomputePreviewAsync(it) }
+        }
+    }
+
+    private suspend fun <T> folderStorage(operation: suspend () -> T): T {
+        return try { operation() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            val reason = (error as? SyncStorageException)?.reason ?: "local_storage_error"
+            val message = if (reason == "storage_full") "The selected music folder is full."
+                else "Check access and free space in the selected music folder, or choose it again."
+            _musicFolderState.update { it.copy(message = message) }
+            throw SyncStorageException(message, error, reason)
+        }
+    }
+
+    private suspend fun openMusicFolder(): DurableMusicFolder? {
+        val tree = selectedTree ?: return null
+        return folderStorage { DurableMusicFolder.open(requireNotNull(folderContext).contentResolver, tree) }
+    }
+
+    private suspend fun buildPreview(manifest: SyncManifest, all: Boolean, selected: Set<String>,
+                                     existing: List<TrackEntity>): SyncPreviewPlan =
+        buildPreview(manifest, all, selected, existing, openMusicFolder())
+
+    private suspend fun buildPreview(manifest: SyncManifest, all: Boolean, selected: Set<String>,
+                                     existing: List<TrackEntity>, destination: DurableMusicFolder?): SyncPreviewPlan {
+        if (destination == null) return SyncPlanner.buildPreview(manifest, all, selected, existing, fileStorage)
+        return folderStorage {
+            val shared = destination
+            val ids = if (all) null else manifest.playlists.filter { it.id in selected }.flatMap { it.trackIds }.toSet()
+            val found = HashSet<String>()
+            for (track in manifest.tracks) {
+                currentCoroutineContext().ensureActive()
+                if ((ids == null || track.id in ids) && shared.containsCandidate(track)) found += track.sha256 + "." + track.extension
+            }
+            SyncPlanner.buildPreview(manifest, all, selected, existing, fileStorage,
+                folderCandidates = found, folderCapacity = shared.availableBytes())
+        }
+    }
+
     fun pairAndConnect(rawUriInput: String): Boolean {
+        if (_musicFolderState.value.busy) return false
+        if (_uiState.value.isFolderImport && _uiState.value.isConnectingOrSyncing) return false
         return when (val parsed = PairingUriParser.parse(rawUriInput)) {
             is PairingParseResult.Invalid -> {
                 _uiState.update {
@@ -166,6 +425,7 @@ class LocalSyncManager(
             }
             is PairingParseResult.Valid -> {
                 cancelActiveWorkInternal(clearCredentials = false)
+                activeFolder = null
                 val creds = parsed.credentials
                 activeCredentials = creds
                 activeManifest = null
@@ -179,9 +439,53 @@ class LocalSyncManager(
         }
     }
 
+    /** Picking a different source is only allowed while this phone is idle. */
+    fun openTransferFolder(source: TransferFolderSource) = prepareTransferFolder { source.open() }
+
+    internal fun prepareTransferFolder(open: suspend () -> VerifiedTransferFolder) {
+        if (_uiState.value.isConnectingOrSyncing || _musicFolderState.value.busy) return
+        cancelActiveWorkInternal(clearCredentials = true)
+        activeFolder = null
+        activeManifest = null
+        val generation = operationGeneration
+        _uiState.value = LocalSyncUiState(phase = SyncPhase.CONNECTING, isFolderImport = true)
+        activeJob = scope.launch {
+            operationMutex.withLock {
+                if (generation != operationGeneration) return@withLock
+                try {
+                    val (folder, preview) = withContext(ioDispatcher) {
+                        val candidate = open()
+                        val manifest = candidate.manifest
+                        val existing = repository.getSyncedTracksForLibrary(manifest.libraryId)
+                        candidate to buildPreview(manifest, true, emptySet(), existing)
+                    }
+                    ensureActive()
+                    if (generation != operationGeneration) return@withLock
+                    val manifest = folder.manifest
+                    activeFolder = folder
+                    activeManifest = manifest
+                    _uiState.value = LocalSyncUiState(
+                        phase = SyncPhase.READY, isFolderImport = true,
+                        libraryId = manifest.libraryId, libraryName = manifest.libraryName, revision = manifest.revision,
+                        playlists = manifest.playlists.map { SyncPlaylistSummaryUi(it.id, it.name, it.trackIds.size, false) },
+                        preview = preview
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (generation != operationGeneration) return@withLock
+                    val message = if (error is SyncProtocolException || error is TransferFolderUnavailable) {
+                        error.message ?: "The transfer folder cannot be opened."
+                    } else "The transfer folder cannot be opened. Check the drive and choose the exported folder again."
+                    _uiState.update { it.copy(phase = SyncPhase.ERROR, errorMessage = message) }
+                }
+            }
+        }
+    }
+
     fun refreshManifest() {
         val creds = activeCredentials ?: return
-        if (_uiState.value.isTransferActive) return
+        if (_uiState.value.isTransferActive || _musicFolderState.value.busy) return
         cancelActiveWorkInternal(clearCredentials = false)
         _uiState.update {
             it.copy(
@@ -218,13 +522,7 @@ class LocalSyncManager(
                 val syncAll = _uiState.value.syncAllMusic || manifest.playlists.isEmpty()
                 val preview = withContext(ioDispatcher) {
                     val existingTracks = repository.getSyncedTracksForLibrary(manifest.libraryId)
-                    SyncPlanner.buildPreview(
-                        manifest = manifest,
-                        syncAllMusic = syncAll,
-                        selectedPlaylistIds = validSelectedIds,
-                        existingSyncedTracks = existingTracks,
-                        fileStorage = fileStorage
-                    )
+                    buildPreview(manifest, syncAll, validSelectedIds, existingTracks)
                 }
                 if (myGeneration != operationGeneration) return@launch
 
@@ -280,7 +578,7 @@ class LocalSyncManager(
     }
 
     fun setSyncAllMusic(syncAll: Boolean) {
-        if (_uiState.value.isConnectingOrSyncing) return
+        if (_uiState.value.isConnectingOrSyncing || _musicFolderState.value.busy) return
         val manifest = activeManifest ?: return
         _uiState.update { state ->
             state.copy(syncAllMusic = syncAll, errorMessage = null)
@@ -289,7 +587,7 @@ class LocalSyncManager(
     }
 
     fun togglePlaylistSelection(playlistId: String) {
-        if (_uiState.value.isConnectingOrSyncing) return
+        if (_uiState.value.isConnectingOrSyncing || _musicFolderState.value.busy) return
         val manifest = activeManifest ?: return
         _uiState.update { state ->
             val updated = state.playlists.map { item ->
@@ -315,7 +613,7 @@ class LocalSyncManager(
             try {
                 val preview = withContext(ioDispatcher) {
                     val existingTracks = repository.getSyncedTracksForLibrary(manifest.libraryId)
-                    SyncPlanner.buildPreview(manifest, currentState.syncAllMusic, selectedIds, existingTracks, fileStorage)
+                    buildPreview(manifest, currentState.syncAllMusic, selectedIds, existingTracks)
                 }
                 if (generationAtStart != operationGeneration || selectionAtStart != selectionGeneration ||
                     activeManifest !== manifest || _uiState.value.isConnectingOrSyncing) return@launch
@@ -331,10 +629,12 @@ class LocalSyncManager(
     }
 
     fun startSync(continuePastFileErrors: Boolean = true) {
-        val creds = activeCredentials ?: return
+        val folder = activeFolder
+        val creds = activeCredentials
+        if ((creds == null) == (folder == null)) return
         val manifest = activeManifest ?: return
         val currentState = _uiState.value
-        if (currentState.isConnectingOrSyncing) return
+        if (currentState.isConnectingOrSyncing || _musicFolderState.value.busy) return
         val selectedIds = currentState.playlists.filter { it.selected }.map { it.id }.toSet()
         if (!currentState.syncAllMusic && selectedIds.isEmpty()) {
             _uiState.update { it.copy(errorMessage = "Select at least one playlist or enable All Available Music.") }
@@ -351,14 +651,15 @@ class LocalSyncManager(
         activeJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             operationMutex.withLock {
                 if (myGeneration != operationGeneration) return@withLock
-                runSelection(creds, manifest, currentState.syncAllMusic, selectedIds,
+                runSelection(creds, folder, manifest, currentState.syncAllMusic, selectedIds,
                     continuePastFileErrors, myGeneration)
             }
         }
     }
 
     private suspend fun runSelection(
-        creds: PairingCredentials,
+        creds: PairingCredentials?,
+        folder: VerifiedTransferFolder?,
         manifest: SyncManifest,
         syncAll: Boolean,
         selectedIds: Set<String>,
@@ -377,6 +678,8 @@ class LocalSyncManager(
         var displayError: String? = null
         var reportDelivery: SyncReportDelivery? = null
         var observedTotal = 0L
+        var committedCount = 0
+        var fileFailureCount = 0
         var consecutiveConnectionFailures = 0
 
         suspend fun checkCurrent() {
@@ -387,7 +690,7 @@ class LocalSyncManager(
             if (generation != operationGeneration) return
             _uiState.update {
                 it.copy(progress = SyncTransferProgress(
-                    completedTracks = results.values.count { row -> row.reason == "none" },
+                    completedTracks = committedCount,
                     totalTracksToDownload = totalDownloads,
                     currentTrackTitle = track.title,
                     currentTrackBytesRead = observed,
@@ -395,7 +698,7 @@ class LocalSyncManager(
                     overallBytesDownloaded = observedTotal + observed,
                     overallBytesToDownload = totalBytes,
                     attemptedTracks = results.size,
-                    failedTracks = results.values.count { row -> row.outcome == "failed" },
+                    failedTracks = fileFailureCount,
                     totalSelectedTracks = selectedTracks.size
                 ))
             }
@@ -406,9 +709,11 @@ class LocalSyncManager(
             fileStorage.ensureDirectories()
             existingPlaylistIds = repository.getSyncedPlaylistsForLibrary(manifest.libraryId)
                 .map { it.remotePlaylistId }.toSet()
+            folder?.checkSnapshot()
             val existingTracks = repository.getSyncedTracksForLibrary(manifest.libraryId)
             val existingById = existingTracks.associateBy { it.syncTrackId }
-            val plan = SyncPlanner.buildPreview(manifest, syncAll, selectedIds, existingTracks, fileStorage)
+            val destination = openMusicFolder()
+            val plan = buildPreview(manifest, syncAll, selectedIds, existingTracks, destination)
             checkCurrent()
             if (generation == operationGeneration) _uiState.update { it.copy(preview = plan) }
             if (selectedTracks.isEmpty() && selectedPlaylists.isEmpty()) {
@@ -429,19 +734,25 @@ class LocalSyncManager(
                     val previous = existingById[track.id]
                     val targetFile = fileStorage.targetFileFor(track.sha256, track.extension)
                     // Reuse only an app-owned file whose actual bytes still match this manifest.
-                    val previousFile = previous?.localFilePath?.let { File(it) }
-                    val reusablePrevious = previousFile != null && previous?.contentSha256 == track.sha256 &&
-                        previousFile.parentFile?.canonicalFile == fileStorage.audioDir.canonicalFile &&
-                        fileStorage.verifyExistingFile(previousFile, track.sizeBytes, track.sha256)
-                    val localFile = if (reusablePrevious) previousFile!! else targetFile
-                    if (!fileStorage.verifyExistingFile(localFile, track.sizeBytes, track.sha256)) {
+                    val shared = destination?.let { chosen ->
+                        folderStorage { chosen.reuseVerified(manifest.libraryId, manifest.libraryName, manifest.revision, track) }
+                    }
+                    val previousFile = fileStorage.ownedPrivateAudio(previous?.localFilePath)
+                    var localFile: File? = when {
+                        shared != null -> null
+                        previousFile != null && previous?.contentSha256 == track.sha256 &&
+                            fileStorage.verifyExistingFile(previousFile, track.sizeBytes, track.sha256) -> previousFile
+                        previousFile != targetFile && fileStorage.verifyExistingFile(targetFile, track.sizeBytes, track.sha256) -> targetFile
+                        else -> null
+                    }
+                    if (shared == null && localFile == null) {
                         if (fileStorage.availableStorageBytes() < track.sizeBytes + 4L * 1024L * 1024L) {
                             throw SyncStorageException("Not enough free storage for the next file.", reason = "storage_full")
                         }
                         val staging = fileStorage.newStagingPartFile()
                         partFile = staging
                         var lastUpdate = 0L
-                        transport.downloadTrackAudio(creds, manifest.revision, track, staging) { bytes ->
+                        val onProgress: (Long) -> Unit = { bytes ->
                             receivedBytes = bytes
                             val now = System.currentTimeMillis()
                             if (now - lastUpdate >= 80L || bytes == track.sizeBytes) {
@@ -450,6 +761,10 @@ class LocalSyncManager(
                             }
                         }
                         checkCurrent()
+                        // Only the selected source can supply a track. Folder imports never open a network connection.
+                        if (folder != null) folder.copyTrack(track, staging, onProgress)
+                        else transport.downloadTrackAudio(requireNotNull(creds), manifest.revision, track, staging, onProgress)
+                        checkCurrent()
                         // Production transport verifies too; keep this gate at the storage/DB boundary.
                         if (!fileStorage.verifyExistingFile(staging, track.sizeBytes, track.sha256)) {
                             throw SyncTrackTransferException("verification_failed", receivedBytes,
@@ -457,15 +772,30 @@ class LocalSyncManager(
                         }
                         receivedBytes = track.sizeBytes
                         verified = true
-                        if (!fileStorage.publishVerifiedPart(staging, targetFile, track.sizeBytes, track.sha256)) {
-                            throw SyncStorageException("Could not publish a verified local file.")
+                        if (destination == null) {
+                            if (!fileStorage.publishVerifiedPart(staging, targetFile, track.sizeBytes, track.sha256)) {
+                                throw SyncStorageException("Could not publish a verified local file.")
+                            }
+                            localFile = targetFile
+                        } else {
+                            // The private part is temporary. Only the selected tree receives the permanent copy.
+                            localFile = staging
                         }
                         downloaded = true
                     } else {
                         verified = true
                     }
                     checkCurrent()
-                    val entity = trackEntity(manifest, track, localFile, previous)
+                    val uri = when {
+                        shared != null -> shared
+                        destination != null -> folderStorage {
+                            destination.store(manifest.libraryId, manifest.libraryName, manifest.revision, track, requireNotNull(localFile))
+                        }
+                        else -> Uri.fromFile(requireNotNull(localFile))
+                    }
+                    checkCurrent()
+                    val privatePath = if (destination == null) requireNotNull(localFile).absolutePath else null
+                    val entity = trackEntity(manifest.libraryId, track, uri, privatePath, previous)
                     importing = true
                     // Finish this small transaction and record its result together. A cancellation
                     // racing a committed Room write must not be reported as a failed import.
@@ -474,6 +804,7 @@ class LocalSyncManager(
                         results[track.id] = SyncTrackResult(track.id,
                             if (downloaded) "downloaded_verified_imported" else "reused_verified_imported",
                             if (downloaded) receivedBytes else 0L, "verified", "none")
+                        committedCount++
                     }
                     consecutiveConnectionFailures = 0
                 } catch (error: Exception) {
@@ -483,6 +814,7 @@ class LocalSyncManager(
                         results[track.id] = SyncTrackResult(track.id, "failed",
                             transfer?.receivedBytes ?: receivedBytes,
                             transfer?.hashStatus ?: if (verified) "verified" else "not_checked", reason)
+                        fileFailureCount++
                     }
                     if (error !is SyncTrackTransferException) {
                         terminalTrackReason = if (results[track.id]?.outcome == "failed") {
@@ -505,6 +837,7 @@ class LocalSyncManager(
                 }
             }
             checkCurrent()
+            folder?.checkSnapshot()
             val verifiedIds = results.values.filter { it.reason == "none" }.map { it.trackId }.toSet()
             val completePlaylists = selectedPlaylists.filter { playlist -> playlist.trackIds.all { it in verifiedIds } }
             val now = System.currentTimeMillis()
@@ -520,7 +853,18 @@ class LocalSyncManager(
                 }
             }
             checkCurrent()
-            if (completePlaylists.isNotEmpty()) {
+            if (destination != null) {
+                for ((index, playlist) in completePlaylists.withIndex()) {
+                    checkCurrent()
+                    val entity = entities[index]
+                    folderStorage { destination.storePlaylist(manifest.libraryId, manifest.libraryName, manifest.revision, playlist) }
+                    withContext(NonCancellable) {
+                        repository.commitSyncedLibraryBatch(emptyList(), listOf(entity),
+                            mapOf(entity.playlistKey to entries.getValue(entity.playlistKey)))
+                        playlistResults[playlist.id] = SyncPlaylistResult(playlist.id, "updated")
+                    }
+                }
+            } else if (completePlaylists.isNotEmpty()) {
                 withContext(NonCancellable) {
                     repository.commitSyncedLibraryBatch(emptyList(), entities, entries)
                     completePlaylists.forEach { playlistResults[it.id] = SyncPlaylistResult(it.id, "updated") }
@@ -536,7 +880,9 @@ class LocalSyncManager(
             displayError = if (stopReason == "cancelled") {
                 cancellationMessage ?: "Sync cancelled. Verified imports are available in your library."
             } else {
-                safeStopMessage(stopReason)
+                if (folder != null && (error is TransferFolderUnavailable || error is SyncRevisionConflictException)) {
+                    error.message
+                } else safeStopMessage(stopReason)
             }
         }
         // A terminal report describes the entire captured selection, including unattempted work.
@@ -568,7 +914,7 @@ class LocalSyncManager(
         // after cancellation, trust/auth/revision failure, storage failure or lost connectivity.
         val mayDeliver = stopReason in setOf("none", "source_unavailable", "unexpected_eof", "size_mismatch",
             "hash_mismatch", "unsupported_format", "verification_failed", "http_error")
-        if (saved && mayDeliver && generation == operationGeneration && runContext[Job]?.isActive != false) {
+        if (creds != null && saved && mayDeliver && generation == operationGeneration && runContext[Job]?.isActive != false) {
             try {
                 reportDelivery = withContext(runContext + ioDispatcher) { SyncClientReports.deliver(report, creds, transport) }
             } catch (_: CancellationException) {
@@ -591,24 +937,25 @@ class LocalSyncManager(
         }
     }
 
-    private fun trackEntity(manifest: SyncManifest, track: SyncTrackDto, localFile: File, previous: TrackEntity?): TrackEntity {
+    private fun trackEntity(libraryId: String, track: SyncTrackDto, location: Uri, privatePath: String?, previous: TrackEntity?): TrackEntity {
         val now = System.currentTimeMillis()
-        val uri = Uri.fromFile(localFile).toString()
+        val uri = location.toString()
         return TrackEntity(
-            trackKey = SyncManifestValidator.stableTrackKey(manifest.libraryId, track.id),
+            trackKey = SyncManifestValidator.stableTrackKey(libraryId, track.id),
             mediaStoreId = null, contentUri = uri, sourceType = TrackSourceType.SYNCED_FILE,
             title = track.title, artist = track.artist.ifBlank { "Unknown Artist" },
             album = track.album.ifBlank { "Unknown Album" }, albumId = null, albumArtUri = uri,
             genre = track.genre.ifBlank { "Unknown Genre" }, durationMs = track.durationMs,
             dateAddedSec = previous?.dateAddedSec ?: now / 1000L, mimeType = track.mimeType,
             sizeBytes = track.sizeBytes, moodTag = previous?.moodTag, isMissingOrUnreadable = false,
-            lastError = null, lastScannedAtMs = now, syncLibraryId = manifest.libraryId,
-            syncTrackId = track.id, contentSha256 = track.sha256, localFilePath = localFile.absolutePath)
+            lastError = null, lastScannedAtMs = now, syncLibraryId = libraryId,
+            syncTrackId = track.id, contentSha256 = track.sha256, localFilePath = privatePath)
     }
 
     private fun reasonFor(error: Exception, importing: Boolean = false): String = when {
         error is CancellationException || error is SyncCancelledException -> "cancelled"
         error is SyncTrackTransferException -> error.reason
+        error is TransferFolderUnavailable -> "source_unavailable"
         error is SyncAuthExpiredException -> "session_expired"
         error is SyncRevisionConflictException -> "manifest_changed"
         error is SyncTlsException -> "tls_failed"
@@ -637,13 +984,34 @@ class LocalSyncManager(
             status = summary.outcome, failedTracksCount = summary.failed, notAttemptedTracksCount = summary.notAttempted,
             preservedPlaylistsCount = summary.playlistsPreserved, deferredPlaylistsCount = summary.playlistsDeferred,
             stopReason = summary.stopReason, reportDelivery = delivery, localReportSaved = saved,
-            failures = report.results.filter { it.outcome == "failed" || it.outcome == "not_attempted" })
+            failures = report.results.filter { it.outcome == "failed" || it.outcome == "not_attempted" }, reportId = report.reportId)
+    }
+
+    /** Explicit local copy of the exact report shown when the user opened the picker. */
+    suspend fun exportLastReport(resolver: ContentResolver, destination: Uri, reportId: String): Boolean {
+        if (destination.scheme != ContentResolver.SCHEME_CONTENT ||
+            destination.authority !in setOf("com.android.externalstorage.documents", "com.android.providers.downloads.documents")) return false
+        val state = _uiState.value
+        if (_musicFolderState.value.busy || state.isConnectingOrSyncing || state.lastOutcome?.reportId != reportId) return false
+        // A concurrent new run may replace the on-disk last report. Never export another run's receipt.
+        return withContext(ioDispatcher) {
+            val report = fileStorage.readLastReport() ?: return@withContext false
+            if (report.reportId != reportId) return@withContext false
+            try {
+                resolver.openOutputStream(destination, "wt")?.use { output ->
+                    output.write(SyncClientReports.encodeLocal(report).toByteArray(Charsets.UTF_8))
+                    output.flush()
+                } ?: return@withContext false
+                true
+            } catch (cancelled: CancellationException) { throw cancelled }
+              catch (_: Exception) { false }
+        }
     }
 
     fun cancelActiveSync(reason: String = "Sync cancelled. Verified imports are available in your library.") {
         if (!_uiState.value.isConnectingOrSyncing) return
         cancellationMessage = reason
-        transport.abortActiveConnections()
+        if (activeCredentials != null) transport.abortActiveConnections()
         activeJob?.cancel(CancellationException(reason))
         // The operation mutex keeps a retry behind the cancelled run's small
         // commit/report cleanup even though the UI can immediately acknowledge Cancel.
@@ -651,13 +1019,16 @@ class LocalSyncManager(
     }
 
     fun cancelActiveSyncOnBackground() {
+        if (_musicFolderState.value.busy) cancelMusicFolderWork()
         if (!_uiState.value.isConnectingOrSyncing) return
         cancelActiveSync("Sync cancelled because SoundsGood moved to the background. Keep SoundsGood open during sync.")
     }
 
     fun disconnectSession() {
+        if (_musicFolderState.value.busy) return
         cancelActiveWorkInternal(clearCredentials = true)
         activeManifest = null
+        activeFolder = null
         _uiState.value = LocalSyncUiState(phase = SyncPhase.UNPAIRED, lastOutcome = _uiState.value.lastOutcome)
     }
 
@@ -665,7 +1036,7 @@ class LocalSyncManager(
         operationGeneration++
         selectionGeneration++
         previewJob?.cancel()
-        transport.abortActiveConnections()
+        if (activeCredentials != null) transport.abortActiveConnections()
         activeJob?.cancel()
         // The next operation takes the same mutex and waits for old work to finish.
         // Each transfer cleans only its own part file; it never deletes another run's staging.

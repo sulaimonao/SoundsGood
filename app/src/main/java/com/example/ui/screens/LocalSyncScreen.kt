@@ -1,5 +1,13 @@
 package com.example.ui.screens
 
+import android.content.ContentResolver
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -45,6 +53,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,6 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
 import com.example.sync.LocalSyncUiState
+import com.example.sync.MusicFolderState
 import com.example.sync.SyncPhase
 import com.example.sync.SyncReportDelivery
 
@@ -67,15 +78,62 @@ fun LocalSyncScreen(
     onSetSyncAllMusic: (Boolean) -> Unit,
     onTogglePlaylist: (String) -> Unit,
     onStartSync: (Boolean) -> Unit,
+    onOpenTransferFolder: (ContentResolver, Uri) -> Unit,
+    onExportReport: suspend (ContentResolver, Uri, String) -> Boolean,
     onCancelSync: () -> Unit,
     onDisconnect: () -> Unit,
     onOpenPlaylists: () -> Unit,
     onOpenLibrary: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    musicFolder: MusicFolderState = MusicFolderState(),
+    onChooseMusicFolder: ((Uri) -> Unit)? = null,
+    onCopyExistingDownloads: () -> Unit = {},
+    onRecheckMusicFolder: () -> Unit = {},
+    onCancelMusicFolder: () -> Unit = {}
 ) {
     // Session pairing input stays strictly local to composition and is cleared immediately after consumption.
     var pairingInput by remember { mutableStateOf("") }
     var continuePastFileErrors by rememberSaveable { mutableStateOf(true) }
+
+    val resolver = LocalContext.current.applicationContext.contentResolver
+    val saveScope = rememberCoroutineScope()
+    var pendingReportId by rememberSaveable { mutableStateOf<String?>(null) }
+    var reportExportNotice by remember(state.lastOutcome?.reportId) { mutableStateOf<String?>(null) }
+    val localReportContract = remember {
+        object : ActivityResultContracts.CreateDocument("application/json") {
+            override fun createIntent(context: Context, input: String): Intent =
+                super.createIntent(context, input).putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+        }
+    }
+    val saveReport = rememberLauncherForActivityResult(localReportContract) { destination ->
+        val id = pendingReportId
+        pendingReportId = null
+        if (destination != null && id != null) saveScope.launch {
+            reportExportNotice = if (onExportReport(resolver, destination, id)) "Report saved."
+            else "Could not save that report. Choose a folder on this phone or a USB drive and try again."
+        }
+    }
+    val localFolderContract = remember {
+        object : ActivityResultContracts.OpenDocumentTree() {
+            override fun createIntent(context: Context, input: Uri?): Intent =
+                super.createIntent(context, input).putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+        }
+    }
+    val chooseTransferFolder = rememberLauncherForActivityResult(localFolderContract) { selected ->
+        if (selected != null) onOpenTransferFolder(resolver, selected)
+    }
+    val musicDestinationContract = remember {
+        object : ActivityResultContracts.OpenDocumentTree() {
+            override fun createIntent(context: Context, input: Uri?): Intent =
+                super.createIntent(context, input)
+                    .putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+        }
+    }
+    val chooseMusicDestination = rememberLauncherForActivityResult(musicDestinationContract) { uri ->
+        if (uri != null) onChooseMusicFolder?.invoke(uri)
+    }
 
     LazyColumn(
         modifier = modifier
@@ -87,11 +145,11 @@ fun LocalSyncScreen(
         item(key = "header") {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "Local Wi-Fi Sync",
+                    text = "Local Sync",
                     style = MaterialTheme.typography.headlineMedium
                 )
                 Text(
-                    text = "One-way offline transfer from your Mac companion over local Wi-Fi TLS. Keep SoundsGood open during sync.",
+                    text = "Sync over Wi-Fi or import a transfer folder from your Mac.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -103,6 +161,45 @@ fun LocalSyncScreen(
                 )
             }
         }
+
+        if (onChooseMusicFolder != null) item(key = "music_destination") {
+            Card(modifier = Modifier.fillMaxWidth().testTag("music_folder_card")) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("On-device music folder", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (musicFolder.selected) {
+                            "Saved in ${musicFolder.displayName ?: "your chosen folder"}. Choose the same folder after reinstalling to recover saved music."
+                        } else {
+                            "App storage is cleared on uninstall. Choose a folder such as Music to keep your synced songs on this device."
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (musicFolder.busy) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Processed ${musicFolder.processed} · Skipped ${musicFolder.skipped}")
+                        OutlinedButton(onClick = onCancelMusicFolder) { Text("Stop") }
+                    } else {
+                        OutlinedButton(
+                            enabled = !state.isConnectingOrSyncing,
+                            onClick = {
+                                val music = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Music")
+                                chooseMusicDestination.launch(music)
+                            }
+                        ) { Text(if (musicFolder.selected) "Change or reconnect folder" else "Choose music folder") }
+                        if (musicFolder.selected) {
+                            OutlinedButton(onClick = onCopyExistingDownloads, enabled = !state.isConnectingOrSyncing) {
+                                Text("Copy existing downloads")
+                            }
+                            OutlinedButton(onClick = onRecheckMusicFolder, enabled = !state.isConnectingOrSyncing) {
+                                Text("Check saved music")
+                            }
+                        }
+                    }
+                    musicFolder.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                }
+            }
+        }
+        if (musicFolder.busy) return@LazyColumn
 
         // Foreground sync notice banner
         item(key = "foreground_notice") {
@@ -130,8 +227,25 @@ fun LocalSyncScreen(
             }
         }
 
+        item(key = "transfer_folder") {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Import from USB or phone storage", style = MaterialTheme.typography.titleMedium)
+                    Text("Choose the Mac export folder that contains READY, manifest.json, and audio. You can preview its tracks and playlists before importing.",
+                        style = MaterialTheme.typography.bodySmall)
+                    if (state.isFolderImport && state.libraryName != null) Text("Selected: ${state.libraryName}")
+                    OutlinedButton(onClick = { chooseTransferFolder.launch(null) }, enabled = !state.isConnectingOrSyncing) {
+                        Text("Choose transfer folder")
+                    }
+                    if (state.isFolderImport && !state.isConnectingOrSyncing) {
+                        OutlinedButton(onClick = onDisconnect) { Text("Close folder") }
+                    }
+                }
+            }
+        }
+
         // Pairing link paste / connection card
-        item(key = "pairing_card") {
+        if (!state.isFolderImport) item(key = "pairing_card") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
@@ -260,9 +374,9 @@ fun LocalSyncScreen(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.5.dp)
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Verifying TLS Pin & Fetching Library...", style = MaterialTheme.typography.titleSmall)
+                            Text(if (state.isFolderImport) "Checking transfer folder…" else "Verifying TLS Pin & Fetching Library...", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                "Confirming Wi-Fi route and Mac certificate fingerprint.",
+                                if (state.isFolderImport) "Reading the manifest and locating its audio files." else "Confirming Wi-Fi route and Mac certificate fingerprint.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -398,7 +512,7 @@ fun LocalSyncScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             PreviewStatRow("Verified and imported", "${outcome.syncedTracksCount}")
-                            PreviewStatRow("Downloaded and imported", "${outcome.downloadedTracksCount}")
+                            PreviewStatRow(if (state.isFolderImport) "Copied and imported" else "Downloaded and imported", "${outcome.downloadedTracksCount}")
                             PreviewStatRow("Verified files reused", "${outcome.reusedOrUnchangedCount}")
                             PreviewStatRow("Failed files", "${outcome.failedTracksCount}")
                             PreviewStatRow("Not attempted", "${outcome.notAttemptedTracksCount}")
@@ -418,7 +532,7 @@ fun LocalSyncScreen(
                                     SyncReportDelivery.DELIVERED -> "Results delivered to the Mac's Desktop report."
                                     SyncReportDelivery.UNSUPPORTED -> "This Mac companion does not support phone results in its Desktop report."
                                     SyncReportDelivery.INCOMPLETE -> "Desktop report delivery was not confirmed."
-                                    null -> "Phone results were not sent to the Mac report."
+                                    null -> if (state.isFolderImport) "Folder import results stay on this phone." else "Phone results were not sent to the Mac report."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -433,6 +547,15 @@ fun LocalSyncScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val reportId = outcome.reportId
+                            if (outcome.localReportSaved && reportId != null) {
+                                OutlinedButton(enabled = !state.isConnectingOrSyncing && pendingReportId == null, onClick = {
+                                    pendingReportId = reportId
+                                    reportExportNotice = null
+                                    saveReport.launch("SoundsGood-results-${reportId.take(8)}.json")
+                                }) { Text("Save last report") }
+                                reportExportNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                            }
                             if (outcome.failures.isNotEmpty()) {
                                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                                 Text("Files needing attention", style = MaterialTheme.typography.titleSmall)
@@ -640,11 +763,16 @@ fun LocalSyncScreen(
                             PreviewStatRow("Changed Audio Files", "${plan.changedTracksCount}")
                             PreviewStatRow("Unchanged Audio", "${plan.unchangedTracksCount}")
                             if (plan.reusedVerifiedFilesCount > 0) {
-                                PreviewStatRow("Verified Files Reused", "${plan.reusedVerifiedFilesCount}")
+                                PreviewStatRow(if (plan.usesMusicFolder) "Local matches to verify" else "Verified Files Reused", "${plan.reusedVerifiedFilesCount}")
                             }
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                            PreviewStatRow("Required Download", formatBytesHuman(plan.requiredDownloadBytes))
-                            PreviewStatRow("Device Free Storage", formatBytesHuman(plan.availableStorageBytes))
+                            PreviewStatRow(if (plan.usesMusicFolder) "Estimated transfer" else if (state.isFolderImport) "Required copy" else "Required Download", formatBytesHuman(plan.requiredDownloadBytes))
+                            if (plan.usesMusicFolder) {
+                                PreviewStatRow("Estimated new space in music folder", formatBytesHuman(plan.requiredFolderBytes))
+                                PreviewStatRow("Music folder free space", if (plan.destinationCapacityUnknown) "Unknown" else formatBytesHuman(plan.availableStorageBytes))
+                            } else {
+                                PreviewStatRow("Device Free Storage", formatBytesHuman(plan.availableStorageBytes))
+                            }
 
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                             Row(
@@ -668,14 +796,16 @@ fun LocalSyncScreen(
                                 )
                             }
                             Text(
-                                "Pairing or certificate failures, Wi-Fi loss, library changes, storage problems, and invalid server responses still stop the run.",
+                                if (state.isFolderImport) "Keep the folder available and SoundsGood open until import finishes."
+                                else "Pairing or certificate failures, Wi-Fi loss, library changes, storage problems, and invalid server responses still stop the run.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
 
                             if (!plan.hasEnoughStorage) {
                                 Text(
-                                    text = "Not enough free storage (includes 16 MiB+ reserve).",
+                                    text = if (plan.usesMusicFolder) "More space is needed in the music folder or on this device to stage the next track."
+                                           else "Not enough free storage (includes 16 MiB+ reserve).",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.error
                                 )
@@ -697,6 +827,8 @@ fun LocalSyncScreen(
                                     Text(
                                         if (plan.tracksToDownload.isEmpty()) {
                                             "Apply Metadata & Playlists"
+                                        } else if (state.isFolderImport) {
+                                            "Import files (${plan.tracksToDownload.size})"
                                         } else {
                                             "Start Sync (${plan.tracksToDownload.size} file${if (plan.tracksToDownload.size == 1) "" else "s"})"
                                         }
@@ -750,7 +882,7 @@ fun LocalSyncScreen(
 }
 
 private fun syncReasonLabel(reason: String): String = when (reason) {
-    "source_unavailable" -> "The Mac source changed or could not be opened."
+    "source_unavailable" -> "The source changed or could not be opened."
     "connection_failed" -> "The connection to the Mac failed."
     "timeout" -> "The transfer timed out."
     "unexpected_eof" -> "The audio stream ended before the full file arrived."

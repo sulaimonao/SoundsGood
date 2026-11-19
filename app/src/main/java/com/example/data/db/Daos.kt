@@ -67,6 +67,13 @@ interface TrackDao {
     @Query("UPDATE tracks SET isMissingOrUnreadable = :unreadable, lastError = :error WHERE trackKey = :trackKey")
     suspend fun updateErrorStatus(trackKey: String, unreadable: Boolean, error: String?)
 
+    // A scan may finish after a sync has moved the track to another URI.
+    @Query("""
+        UPDATE tracks SET isMissingOrUnreadable = :unreadable, lastError = :error
+        WHERE trackKey = :trackKey AND contentUri = :scannedUri AND sourceType = 'SYNCED_FILE'
+    """)
+    suspend fun updateSyncedScanStatus(trackKey: String, scannedUri: String, unreadable: Boolean, error: String?)
+
     @Transaction
     suspend fun syncMediaStoreTracks(scannedTracks: List<TrackEntity>) {
         if (scannedTracks.isEmpty()) {

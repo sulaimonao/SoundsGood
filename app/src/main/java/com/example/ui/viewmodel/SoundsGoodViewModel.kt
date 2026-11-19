@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import android.Manifest
 import android.content.Context
+import android.content.ContentResolver
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -19,6 +20,8 @@ import com.example.playback.PlaybackBus
 import com.example.playback.PlaybackClient
 import com.example.playback.PlaybackUiState
 import com.example.sync.LocalSyncManager
+import com.example.sync.MusicFolderState
+import com.example.sync.TransferFolderSource
 import com.example.sync.LocalSyncUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -106,6 +109,8 @@ class SoundsGoodViewModel(
 
     val syncUiState: StateFlow<LocalSyncUiState> =
         localSyncManager?.uiState ?: MutableStateFlow(LocalSyncUiState()).asStateFlow()
+    val musicFolderState: StateFlow<MusicFolderState> =
+        localSyncManager?.musicFolderState ?: MutableStateFlow(MusicFolderState()).asStateFlow()
 
     val playbackState: StateFlow<PlaybackUiState> = playbackClient.state
     val playbackError: StateFlow<String?> = PlaybackBus.playbackError
@@ -421,6 +426,33 @@ class SoundsGoodViewModel(
     fun pairWithMacLink(rawUri: String): Boolean {
         return localSyncManager?.pairAndConnect(rawUri) ?: false
     }
+
+    fun openTransferFolder(resolver: ContentResolver, selected: Uri) {
+        localSyncManager?.openTransferFolder(TransferFolderSource(resolver, selected))
+    }
+
+    fun restoreMusicFolderSelection(context: Context) {
+        localSyncManager?.attachMusicFolder(context.applicationContext)
+    }
+
+    fun chooseMusicFolder(context: Context, selected: Uri) {
+        localSyncManager?.chooseMusicFolder(context.applicationContext, selected)
+    }
+
+    fun copyExistingDownloads() {
+        localSyncManager?.migrateMusicFolder()
+    }
+
+    fun recheckMusicFolder() {
+        localSyncManager?.recoverMusicFolder()
+    }
+
+    fun cancelMusicFolderWork() {
+        localSyncManager?.cancelMusicFolderWork()
+    }
+
+    suspend fun exportSyncReport(resolver: ContentResolver, destination: Uri, reportId: String): Boolean =
+        localSyncManager?.exportLastReport(resolver, destination, reportId) == true
 
     fun refreshSyncManifest() {
         localSyncManager?.refreshManifest()

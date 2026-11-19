@@ -10,9 +10,10 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
 
-class SyncFileStorage(private val rootDir: File) {
+class SyncFileStorage private constructor(private val rootDir: File, internal val applicationContext: Context?) {
 
-    constructor(context: Context) : this(context.filesDir)
+    constructor(rootDir: File) : this(rootDir, null)
+    constructor(context: Context) : this(context.filesDir, context.applicationContext)
 
     val audioDir: File = File(rootDir, "synced_audio")
     val stagingDir: File = File(rootDir, "synced_audio_staging")
@@ -33,6 +34,16 @@ class SyncFileStorage(private val rootDir: File) {
         require(SyncManifestValidator.SHA256_REGEX.matches(sha256)) { "Invalid sha256 digest" }
         require(extension in SyncManifestValidator.ALLOWED_EXTENSION_MIME_PAIRS) { "Invalid extension" }
         return File(audioDir, "$sha256.$extension")
+    }
+
+    fun ownedPrivateAudio(path: String?): File? {
+        if (path == null) return null
+        val candidate = File(path)
+        return try {
+            val root = audioDir.canonicalFile
+            val resolved = candidate.canonicalFile
+            candidate.takeIf { it.parentFile?.canonicalFile == root && resolved.parentFile == root && resolved.name == it.name }
+        } catch (_: java.io.IOException) { null }
     }
 
     fun newStagingPartFile(): File {

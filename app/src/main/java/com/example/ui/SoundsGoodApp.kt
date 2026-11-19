@@ -116,6 +116,9 @@ private val TopLevelDestinations = listOf(
 @Composable
 fun SoundsGoodApp(viewModel: SoundsGoodViewModel) {
     val context = LocalContext.current
+    LaunchedEffect(viewModel, context.applicationContext) {
+        viewModel.restoreMusicFolderSelection(context.applicationContext)
+    }
     val view = LocalView.current
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -127,6 +130,7 @@ fun SoundsGoodApp(viewModel: SoundsGoodViewModel) {
     val selectedPlaylistId by viewModel.selectedPlaylistId.collectAsStateWithLifecycle()
     val selectedSyncedPlaylistKey by viewModel.selectedSyncedPlaylistKey.collectAsStateWithLifecycle()
     val syncUiState by viewModel.syncUiState.collectAsStateWithLifecycle()
+    val musicFolder by viewModel.musicFolderState.collectAsStateWithLifecycle()
     val navigateToSyncRequested by viewModel.navigateToSyncRequested.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
     val playbackError by viewModel.playbackError.collectAsStateWithLifecycle()
@@ -134,9 +138,9 @@ fun SoundsGoodApp(viewModel: SoundsGoodViewModel) {
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Keep screen awake only while an active Mac sync transfer is running in foreground.
-    DisposableEffect(syncUiState.isTransferActive, view) {
-        view.keepScreenOn = syncUiState.isTransferActive
+    val keepAwake = syncUiState.isTransferActive || musicFolder.busy
+    DisposableEffect(keepAwake, view) {
+        view.keepScreenOn = keepAwake
         onDispose {
             view.keepScreenOn = false
         }
@@ -351,11 +355,18 @@ fun SoundsGoodApp(viewModel: SoundsGoodViewModel) {
                             composable<LocalSyncRoute> {
                                 LocalSyncScreen(
                                     state = syncUiState,
+                                    musicFolder = musicFolder,
+                                    onChooseMusicFolder = { viewModel.chooseMusicFolder(context, it) },
+                                    onCopyExistingDownloads = viewModel::copyExistingDownloads,
+                                    onRecheckMusicFolder = viewModel::recheckMusicFolder,
+                                    onCancelMusicFolder = viewModel::cancelMusicFolderWork,
                                     onPairAndConnect = viewModel::pairWithMacLink,
                                     onRefreshManifest = viewModel::refreshSyncManifest,
                                     onSetSyncAllMusic = viewModel::setSyncAllMusic,
                                     onTogglePlaylist = viewModel::toggleSyncPlaylist,
                                     onStartSync = viewModel::startLocalSync,
+                                    onOpenTransferFolder = viewModel::openTransferFolder,
+                                    onExportReport = viewModel::exportSyncReport,
                                     onCancelSync = viewModel::cancelLocalSync,
                                     onDisconnect = viewModel::disconnectMacSession,
                                     onOpenPlaylists = { navigateTopLevel(SmartPlaylistsRoute) },

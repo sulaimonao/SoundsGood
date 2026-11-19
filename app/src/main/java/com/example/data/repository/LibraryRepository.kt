@@ -109,23 +109,37 @@ class LibraryRepository(
                 )
             }
         }
-        // Validate existing synced files on disk without ever deleting synced DB rows
+        // Check the stored playback location. Shared documents may be regranted later.
         val syncedTracks = trackDao.getTracksBySourceType(TrackSourceType.SYNCED_FILE)
         syncedTracks.forEach { syncedTrack ->
             val file = syncedTrack.localFilePath?.let { File(it) }
-            val readable = file != null && file.isFile && file.length() == syncedTrack.sizeBytes
-            if (readable && syncedTrack.isMissingOrUnreadable) {
-                trackDao.updateErrorStatus(syncedTrack.trackKey, false, null)
-            } else if (!readable && !syncedTrack.isMissingOrUnreadable) {
-                trackDao.updateErrorStatus(
-                    syncedTrack.trackKey,
-                    true,
-                    "Synced local audio file missing or size mismatch"
+            val isShared = file == null && Uri.parse(syncedTrack.contentUri).scheme == "content"
+            val readable = if (isShared) {
+                scanner.isUriReadable(syncedTrack.contentUri)
+            } else {
+                file != null && file.isFile && file.length() == syncedTrack.sizeBytes
+            }
+            val unavailable = !readable
+            if (syncedTrack.isMissingOrUnreadable != unavailable) {
+                val error = when {
+                    readable -> null
+                    isShared -> "Music folder unavailable. Reconnect it in Local Sync."
+                    else -> "Synced local audio file missing or size mismatch"
+                }
+                trackDao.updateSyncedScanStatus(
+                    syncedTrack.trackKey, syncedTrack.contentUri, unavailable, error
                 )
             }
         }
         result
     }
+
+    suspend fun getAllSyncedTracks(): List<TrackEntity> = withContext(Dispatchers.IO) {
+        trackDao.getTracksBySourceType(TrackSourceType.SYNCED_FILE)
+    }
+
+    suspend fun getSyncedPlaylistEntries(playlistKey: String): List<SyncedPlaylistEntryEntity> =
+        withContext(Dispatchers.IO) { syncedPlaylistDao.getEntriesForPlaylist(playlistKey) }
 
     suspend fun getSyncedTracksForLibrary(libraryId: String): List<TrackEntity> =
         withContext(Dispatchers.IO) {

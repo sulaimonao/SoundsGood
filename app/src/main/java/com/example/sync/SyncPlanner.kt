@@ -1,7 +1,6 @@
 package com.example.sync
 
 import com.example.data.db.TrackEntity
-import java.io.File
 
 data class SyncPreviewPlan(
     val libraryId: String,
@@ -21,7 +20,11 @@ data class SyncPreviewPlan(
     val availableStorageBytes: Long,
     val hasEnoughStorage: Boolean,
     val storageOverflow: Boolean,
-    val skippedItems: List<SyncSkippedDto>
+    val skippedItems: List<SyncSkippedDto>,
+    val usesMusicFolder: Boolean = false,
+    val destinationCapacityUnknown: Boolean = false,
+    val requiredFolderBytes: Long = 0L,
+    val stagingBytes: Long = 0L
 ) {
     val totalSelectedTracksCount: Int
         get() = selectedTracks.size
@@ -37,7 +40,9 @@ object SyncPlanner {
         selectedPlaylistIds: Set<String>,
         existingSyncedTracks: List<TrackEntity>,
         fileStorage: SyncFileStorage,
-        availableStorageBytes: Long = fileStorage.availableStorageBytes()
+        availableStorageBytes: Long = fileStorage.availableStorageBytes(),
+        folderCandidates: Set<String>? = null,
+        folderCapacity: Long? = null
     ): SyncPreviewPlan {
         val existingByKey = existingSyncedTracks.associateBy { it.trackKey }
         val trackById = manifest.tracks.associateBy { it.id }
@@ -69,12 +74,41 @@ object SyncPlanner {
         var requiredBytes = 0L
         var overflow = false
         val toDownload = mutableListOf<SyncTrackDto>()
+        val destinationBlobs = HashSet<String>()
+        val missingBlobs = HashSet<String>()
+        fun addBytes(total: Long, amount: Long): Long {
+            if (amount < 0L || amount > Long.MAX_VALUE - total) {
+                overflow = true
+                return Long.MAX_VALUE
+            }
+            return total + amount
+        }
+        var folderBytes = 0L
+        var stagingBytes = 0L
 
         for (dto in selectedTracks) {
             val stableKey = SyncManifestValidator.stableTrackKey(manifest.libraryId, dto.id)
             val existing = existingByKey[stableKey]
             val targetFile = fileStorage.targetFileFor(dto.sha256, dto.extension)
-            val existingLocalFile = existing?.localFilePath?.let { File(it) }
+            val existingLocalFile = fileStorage.ownedPrivateAudio(existing?.localFilePath)
+            if (folderCandidates != null) {
+                val blobName = targetFile.name
+                val inFolder = blobName in folderCandidates
+                // File presence/size is a preview estimate. The transfer verifies bytes before every commit.
+                val hasPrivate = !inFolder && ((existing?.contentSha256 == dto.sha256 && existingLocalFile?.isFile == true &&
+                    existingLocalFile.length() == dto.sizeBytes) || (targetFile.isFile && targetFile.length() == dto.sizeBytes))
+                if (existing == null) newCount++ else if (existing.contentSha256 == dto.sha256 && (inFolder || hasPrivate)) unchangedCount++
+                else changedCount++
+                if (!inFolder && destinationBlobs.add(blobName)) folderBytes = addBytes(folderBytes, dto.sizeBytes)
+                if (inFolder || hasPrivate || !missingBlobs.add(blobName)) {
+                    reusedCount++
+                } else {
+                    toDownload.add(dto)
+                    requiredBytes = addBytes(requiredBytes, dto.sizeBytes)
+                    stagingBytes = maxOf(stagingBytes, dto.sizeBytes)
+                }
+                continue
+            }
 
             val dbMatchesAndDiskVerified = existing != null &&
                 existing.contentSha256 == dto.sha256 &&
@@ -127,7 +161,10 @@ object SyncPlanner {
             else -> requiredBytes + reserveMargin
         }
 
-        val hasEnough = !overflow && requiredWithReserve <= availableStorageBytes
+        val folderWithReserve = if (folderBytes > 0) addBytes(folderBytes, maxOf(STORAGE_SAFETY_RESERVE_MIN, folderBytes / 20)) else 0L
+        val stagingWithReserve = if (stagingBytes > 0) addBytes(stagingBytes, 4L * 1024L * 1024L) else 0L
+        val hasEnough = !overflow && if (folderCandidates == null) requiredWithReserve <= availableStorageBytes
+            else stagingWithReserve <= availableStorageBytes && (folderCapacity == null || folderWithReserve <= folderCapacity)
 
         return SyncPreviewPlan(
             libraryId = manifest.libraryId,
@@ -143,11 +180,13 @@ object SyncPlanner {
             selectedTracks = selectedTracks,
             selectedPlaylists = selectedPlaylists,
             requiredDownloadBytes = requiredBytes,
-            requiredWithReserveBytes = requiredWithReserve,
-            availableStorageBytes = availableStorageBytes,
+            requiredWithReserveBytes = if (folderCandidates == null) requiredWithReserve else folderWithReserve,
+            availableStorageBytes = if (folderCandidates == null) availableStorageBytes else folderCapacity ?: 0L,
             hasEnoughStorage = hasEnough,
             storageOverflow = overflow,
-            skippedItems = manifest.skipped
+            skippedItems = manifest.skipped,
+            usesMusicFolder = folderCandidates != null, destinationCapacityUnknown = folderCandidates != null && folderCapacity == null,
+            requiredFolderBytes = folderBytes, stagingBytes = stagingBytes
         )
     }
 }
