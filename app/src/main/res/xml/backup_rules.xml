@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Legacy Auto Backup rules for Android 11 (API 30) and lower.
+   See https://developer.android.com/identity/data/autobackup
+   SoundsGood keeps all local library metadata, listening history,
+   smart playlist rules, preferences, and playback snapshots strictly on-device.
+-->
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="external" path="." />
+    <exclude domain="root" path="." />
+    <exclude domain="device_database" path="." />
+    <exclude domain="device_file" path="." />
+    <exclude domain="device_sharedpref" path="." />
+    <exclude domain="device_root" path="." />
+</full-backup-content>

@@ -1,0 +1,6 @@
+{
+  "name": "SoundsGood",
+  "description": "Offline local music player for Android with Media3 ExoPlayer background playback, MediaStore library indexing, Room listening analytics, and rule-based Smart Playlists.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
