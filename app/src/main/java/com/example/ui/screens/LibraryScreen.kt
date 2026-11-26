@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -104,9 +105,14 @@ fun LibraryScreen(
     modifier: Modifier = Modifier
 ) {
     var showSearch by rememberSaveable { mutableStateOf(false) }
+    var showLegalDisclosure by rememberSaveable { mutableStateOf(false) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     var moodTarget by remember { mutableStateOf<TrackWithStats?>(null) }
     var detailsTarget by remember { mutableStateOf<TrackWithStats?>(null) }
+
+    if (showLegalDisclosure) {
+        LegalDisclosureDialog(onDismiss = { showLegalDisclosure = false })
+    }
 
     // Support system back when drilled into an Artist or Album detail
     BackHandler(enabled = state.selectedArtist != null || state.selectedAlbum != null) {
@@ -268,6 +274,20 @@ fun LibraryScreen(
                         contentDescription = stringResource(R.string.cd_refresh_library)
                     )
                 }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(
+                onClick = { showLegalDisclosure = true },
+                modifier = Modifier.testTag("library_about_legal_button")
+            ) {
+                Icon(Icons.Filled.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Personal Edition · About & legal")
             }
         }
 

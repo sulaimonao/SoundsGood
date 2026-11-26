@@ -1,0 +1,6 @@
+body{font:18px/1.65 system-ui,sans-serif;color:#20252a;background:#fafaf7;margin:0}
+header,main,footer{max-width:48rem;margin:auto;padding:1.4rem}header{border-bottom:1px solid #d2d7d1}
+nav{display:flex;flex-wrap:wrap;gap:.5rem 1rem;font-size:1rem}a{color:#165d46;text-underline-offset:.18em}
+h1{font-size:2.3rem;line-height:1.15}h2{font-size:1.4rem;margin-top:2rem}footer{border-top:1px solid #d2d7d1;font-size:.9rem}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.9rem}li{margin:.4rem 0}a:focus-visible{outline:3px solid #b64f20;outline-offset:3px}
+@media(max-width:40rem){body{font-size:17px}h1{font-size:1.9rem}header,main,footer{padding:1rem}}

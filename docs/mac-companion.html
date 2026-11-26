@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mac companion installation and setup</title><link rel="stylesheet" href="style.css"></head><body><header><nav aria-label="Documentation"><a href="index.html">SoundsGood</a><a href="full-privacy.html">Full privacy</a><a href="personal-privacy.html">Personal privacy</a><a href="support.html">Support</a><a href="third-party.html">Licenses</a></nav></header><main><h1>Mac companion installation and setup</h1><p>SoundsGood Sync reads a Music library XML export and the audio folders you select, then makes eligible music and playlist information available to the Android app over local Wi-Fi or through a USB transfer folder.</p>
+<h2>Download and installation status</h2>
+<p><strong>An official public Mac companion download is not currently available from this site.</strong> The inspected companion requires macOS 13 or later. The current build script creates an ad-hoc-signed development app; a reviewed public distribution package, supported architecture information, signing and notarization verification, and an official download link remain to be prepared.</p>
+<p>When an approved package is made available, download it only from the official link identified here and follow the instructions supplied for that exact package. A ZIP would need extraction; a disk image would need to be opened before copying the app as instructed. Do not assume either packaging format is available today. Open the installed app normally and follow macOS's security prompts. If macOS rejects the package or the displayed publisher differs from the announced release, stop and <a href="support.html">contact support</a>; do not disable security protections.</p>
+<p>The following setup instructions describe the implemented companion workflow for an already available, trusted copy. They are not a claim that a public release has been distributed.</p>
+<h2>Prepare your music</h2>
+<ol>
+<li>Use a Mac running macOS 13 or later and an Android device with the intended SoundsGood edition installed.</li>
+<li>In Music on your Mac, choose <strong>File → Library → Export Library</strong> and save the XML export. The XML describes your library; it does not contain the audio.</li>
+<li>In SoundsGood Sync, choose <strong>Choose Library XML…</strong>, then <strong>Choose Audio Folders…</strong>. Select folders containing the corresponding downloaded audio files.</li>
+<li>Select the playlists to copy, or enable <strong>All eligible music</strong>. Apple Smart Playlists are copied as their current song lists, not as live Apple playlist rules.</li>
+</ol>
+<p>The companion skips unavailable, known protected or cloud-only items and files outside the selected roots. It does not download subscription tracks, remove DRM, convert audio formats or guarantee Android playback of every eligible file. Keep your original music and independent backups.</p>
+<h2>Transfer over local Wi-Fi</h2>
+<ol>
+<li>Connect the Mac and Android device to the same trusted local network. Choose the appropriate private Mac address under <strong>Choose the local connection</strong>.</li>
+<li>Review <strong>Save a sync report on Desktop</strong>. It is enabled by default. Reports can include song titles and artists; Desktop synchronization services may copy them elsewhere according to your settings.</li>
+<li>Click <strong>Prepare &amp; Start Sharing</strong>. After preparation, the Mac displays a pairing code and QR image.</li>
+<li>Click <strong>Copy Pairing Code</strong> and securely transfer it to the Android device. In the intended SoundsGood edition, open <strong>Local Sync</strong>, paste the pairing link and choose <strong>Connect to Mac</strong>. A camera can open the QR link if that device supports it. Choose the intended edition if Android presents an app chooser.</li>
+<li>Choose an appropriate destination folder, select the music or playlists and review the sync preview. Start the transfer. Use a separate managed destination for each edition.</li>
+<li>Check the final Android result. Personal Edition should remain in the foreground during sync; Full supports user-started background sync with progress and cancellation controls. Interrupted work may require reconnecting and reviewing a new preview.</li>
+<li>When finished, click <strong>Stop Sharing</strong> on the Mac. This invalidates the session's old pairing code.</li>
+</ol>
+<p>A pairing code grants access to the selected music while sharing is active. Keep it private. The app uses encrypted local TLS and a pinned certificate fingerprint; it does not require opening router ports to the internet.</p>
+<h2>Transfer using a folder or USB drive</h2>
+<ol>
+<li>After selecting the XML, audio folders and music, choose <strong>Export for USB…</strong>.</li>
+<li>Choose a local folder or attached drive, preferably outside iCloud Drive and other synchronization services. Allow the export to finish.</li>
+<li>Make the completed export folder available on Android. In <strong>Local Sync → Import from USB or phone storage</strong>, choose <strong>Choose transfer folder</strong>.</li>
+<li>Select the folder containing <code>READY</code>, <code>manifest.json</code> and <code>audio</code>, review the preview and import to your selected destination.</li>
+</ol>
+<p>The export is a copy containing music and metadata. Protect it like the original library. See the <a href="support.html">support guide</a> for connection and file-compatibility troubleshooting, and the <a href="full-privacy.html">Full Privacy Policy</a> or <a href="personal-privacy.html">Personal Edition Privacy Policy</a> for data handling.</p>
+</main><footer>© 2026 Akeem Oluwadamilare Sulaimon · <a href="mailto:thedream.akeems@gmail.com">Contact</a></footer></body></html>

@@ -16,3 +16,20 @@
 local.properties
 .env
 debug.keystore
+
+# Local signing, credentials and private release/review evidence
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.key
+*.pem
+keystore.properties
+signing.properties
+google-services.json
+.env.*
+!.env.example
+/private/
+/app/release/
+*.apk
+*.aab
