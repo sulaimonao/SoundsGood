@@ -69,7 +69,7 @@ Permissions and other services
 
 Audio-library access reads music you permit. Network access and network-state access
 support local Wi-Fi sync. Foreground-service, notification and wake-lock permissions support
-playback. Personal sync itself requires the app to stay open. The app has no developer account,
+playback. Personal sync itself requires the app to stay open. You do not need a SoundsGood account. The app has no
 advertising, analytics-upload or automatic crash-upload service. It does not request camera,
 microphone, location or contacts access. Operating-system and file-provider services operate
 under their own settings and policies.
@@ -91,9 +91,8 @@ Support and this website
 
 
 If you email support, the developer receives your address and what you choose to send,
-and uses it to respond and troubleshoot. Send only necessary information. Correspondence is
-retained only as needed for support and applicable legal obligations; email the contact above
-to request access, correction or deletion. Do not send music, passwords or pairing codes.
+and uses it to respond and troubleshoot. Send only necessary information. For privacy questions or to request access,
+correction or deletion of information you sent, email the publisher at the address above. Do not send music, passwords or pairing codes.
 
 
 These documentation pages add no analytics, advertising, cookies or third-party scripts.

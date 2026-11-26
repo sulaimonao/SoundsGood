@@ -22,7 +22,7 @@ the Personal license does not license Full. Contact: thedream.akeems@gmail.com.
 Private app data includes music metadata, listening events, playlists, mood tags
 and playback state. Optional sync uses network permission to communicate with a
 paired Mac over local Wi-Fi, including automatic transfer-result reports. The app
-has no developer account, advertising or telemetry-upload service. Android backup
+does not require a SoundsGood account or use advertising or telemetry-upload services. Android backup
 is disabled for private app data; shared music/recovery records and exported reports
 remain outside that exclusion. File providers and OS folder sync can apply their
 own cloud behavior. See the [Personal privacy policy](docs/personal-privacy.html).
@@ -30,14 +30,13 @@ own cloud behavior. See the [Personal privacy policy](docs/personal-privacy.html
 The Library's **Personal Edition · About & legal** button opens bundled privacy,
 license and attribution text without a network connection.
 
-- [Full privacy](docs/full-privacy.html) and [Full terms](docs/full-terms.html)
-- [Support](docs/support.html) and [Mac companion 0.3.1: availability, installation and pairing](docs/mac-companion.html) (signed and timestamped candidate; not notarized or published)
+- [SoundsGood Full Privacy Policy](https://sulaimonao.github.io/SoundsGood/full-privacy.html) and [Terms of Service](https://sulaimonao.github.io/SoundsGood/full-terms.html)
+- [Product support](https://sulaimonao.github.io/SoundsGood/support.html) and [Mac companion setup](docs/mac-companion.html). The Mac download is forthcoming; there is no public installer.
 - [Build the Mac review image offline](companion/README.md) using the separate, authorized companion source checkout.
 - [All public documentation](docs/index.html)
 
 `docs/` contains static GitHub Pages files with no scripts, external fonts, tracking,
-forms or storefront. Hosting is prepared locally; these links do not mean a site is
-already published. Pages must be explicitly enabled after publication review.
+forms or storefront. The documentation site uses the `docs/` directory on `main`.
 
 ## Personal edition behavior
 
