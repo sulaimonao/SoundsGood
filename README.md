@@ -31,7 +31,7 @@ The Library's **Personal Edition · About & legal** button opens bundled privacy
 license and attribution text without a network connection.
 
 - [Full privacy](docs/full-privacy.html) and [Full terms](docs/full-terms.html)
-- [Support](docs/support.html) and [Mac companion 0.3.1: availability, installation and pairing](docs/mac-companion.html) (local review DMG; not published or notarized)
+- [Support](docs/support.html) and [Mac companion 0.3.1: availability, installation and pairing](docs/mac-companion.html) (signed and timestamped candidate; not notarized or published)
 - [Build the Mac review image offline](companion/README.md) using the separate, authorized companion source checkout.
 - [All public documentation](docs/index.html)
 

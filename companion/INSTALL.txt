@@ -1,8 +1,9 @@
 SoundsGood Sync for Mac · 0.3.1 (4)
 
-Requires macOS 13 or later on Apple silicon or Intel. This local review
-image has not been notarized. Do not bypass Gatekeeper. If macOS refuses
-to open the app, stop and contact the publisher. No installer, drivers,
+Requires macOS 13 or later on Apple silicon or Intel. Use only a release
+approved by the publisher and compare its SHA-256 with the published value.
+Do not bypass Gatekeeper. If macOS refuses to open the app, stop and
+contact the publisher. No installer, drivers,
 developer tools or access to the source repository are required to use it.
 
 For an approved release: open the disk image, drag SoundsGoodSync.app
