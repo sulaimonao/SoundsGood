@@ -6,3 +6,4 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.9rem}li{margin:.4rem 
 @media(max-width:40rem){body{font-size:17px}h1{font-size:1.9rem}header,main,footer{padding:1rem}}
 .gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,12rem),1fr));gap:1rem}
 .gallery figure{margin:0}.gallery img{display:block;width:100%;height:auto;border-radius:.5rem}.gallery figcaption{margin-top:.3rem;font-weight:600}
+.play-actions{display:flex;flex-wrap:wrap;gap:.65rem}.play-actions a{padding:.55rem .9rem;border:2px solid #165d46;border-radius:.5rem;text-decoration:none;font-weight:600}.play-actions a:first-child{background:#165d46;color:white}.play-actions a:hover{text-decoration:underline}
