@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the complete static site and the offline disclosure dependency closure."""
 from html.parser import HTMLParser
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
 from build_legal_assets import expected_asset
@@ -10,6 +11,12 @@ DOCS = ROOT / 'docs'
 EXPECTED = {'index.html', 'full-privacy.html', 'full-terms.html', 'personal-privacy.html',
             'personal-license.html', 'support.html', 'mac-companion.html', 'third-party.html'}
 VOID = {'meta', 'link', 'br', 'hr', 'img', 'input', 'source', 'wbr'}
+APPROVED_IMAGES = {
+    'images/soundsgood.png': 'cee127dba8fae3ea00dc7d36498746666151b6c9f3dd6d254a4503b7a26bd121',
+    'images/01-library.png': '2f1e54849570e7735293fc0a3bb1ccfc286cb1fb3c81e0b384c9c23bd5f74a8c',
+    'images/05-player.png': '680b6d7a96841c18de4edcae85d687bd1fb22058edd07de60513b0fbd1832785',
+    'images/06-journal.png': '2e2a58b56aea0d2e25721c630a8117b3ee816eb0270ca3501777688b40ea0f09',
+}
 
 class Check(HTMLParser):
     def __init__(self, path):
@@ -44,6 +51,9 @@ assert (DOCS / '.nojekyll').is_file()
 for path in sorted(DOCS.rglob('*')):
     assert not path.is_symlink(), 'Symlink in published content'
     if not path.is_file(): continue
+    if path.relative_to(DOCS).as_posix() in APPROVED_IMAGES:
+        assert sha256(path.read_bytes()).hexdigest() == APPROVED_IMAGES[path.relative_to(DOCS).as_posix()], path
+        continue
     assert path.suffix in {'.html', '.css', '.txt', '.json'} or path.name == '.nojekyll', path
     content = path.read_text()
     for marker in ('/Users/', 'BEGIN PRIVATE KEY', 'PREREQUISITE:', 'TODO', 'PLACEHOLDER'):
