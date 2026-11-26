@@ -1,0 +1,24 @@
+SoundsGood Sync for Mac · 0.3.1 (4)
+
+Requires macOS 13 or later on Apple silicon or Intel. This local review
+image has not been notarized. Do not bypass Gatekeeper. If macOS refuses
+to open the app, stop and contact the publisher. No installer, drivers,
+developer tools or access to the source repository are required to use it.
+
+For an approved release: open the disk image, drag SoundsGoodSync.app
+onto Applications and eject the disk image. Do not replace a running
+copy or interrupt a sharing session. Open the installed copy normally.
+
+In Music, use File > Library > Export Library. In SoundsGood Sync choose
+the exported XML, then the folders containing the audio. On a trusted
+local Wi-Fi network select the Mac address and music to transfer, review
+the Desktop report setting, and choose Prepare & Start Sharing. Enter the
+code shown by the Mac in Local Sync on Android. Never share the code in
+a support request. Stop Sharing when finished. Alternatively, Export for
+USB creates a folder to import via Local Sync on the Android device.
+
+Copyright 2026 Akeem Oluwadamilare Sulaimon. All rights reserved except
+where separately granted. The enclosed Personal Edition license retains
+its stated scope; it does not license SoundsGood Full, third-party software
+or your music. macOS frameworks and /usr/bin/openssl are provided by the
+operating system, not redistributed here. Support: thedream.akeems@gmail.com
