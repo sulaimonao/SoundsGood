@@ -1,4 +1,4 @@
-SoundsGood Sync for Mac · 0.3.1 (4)
+SoundsGood Sync for Mac · 0.3.1 (6)
 
 Requires macOS 13 or later on Apple silicon or Intel. Use only a release
 approved by the publisher and compare its SHA-256 with the published value.
@@ -6,9 +6,11 @@ Do not bypass Gatekeeper. If macOS refuses to open the app, stop and
 contact the publisher. No installer, drivers,
 developer tools or access to the source repository are required to use it.
 
-For an approved release: open the disk image, drag SoundsGoodSync.app
-onto Applications and eject the disk image. Do not replace a running
-copy or interrupt a sharing session. Open the installed copy normally.
+Download the ZIP and SHA256SUMS.txt using the official guide:
+https://sulaimonao.github.io/SoundsGood/mac-companion.html
+From their folder, run shasum -a 256 -c SHA256SUMS.txt and check for OK.
+Double-click the ZIP and move SoundsGoodSync.app to Applications. Do not
+replace a running copy or interrupt a sharing session. Open it from Applications.
 
 In Music, use File > Library > Export Library. In SoundsGood Sync choose
 the exported XML, then the folders containing the audio. On a trusted

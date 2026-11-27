@@ -1,10 +1,11 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mac companion installation and setup</title><link rel="stylesheet" href="style.css"></head><body><header><nav aria-label="Documentation"><a href="index.html">SoundsGood</a><a href="full-privacy.html">Full privacy</a><a href="personal-privacy.html">Personal privacy</a><a href="support.html">Support</a><a href="third-party.html">Licenses</a></nav></header><main><h1>Mac companion installation and setup</h1><p>SoundsGood Sync reads a Music library XML export and the audio folders you select, then makes eligible music and playlist information available to the Android app over local Wi-Fi or through a USB transfer folder.</p>
-<h2>Download and installation status</h2>
-<p><strong>Mac download forthcoming.</strong> No public installer is available. This guide describes SoundsGood Sync 0.3.1, which targets macOS 13 or later on Intel and Apple silicon. Customer distribution and end-to-end compatibility checks are not complete.</p>
-<p>When an approved release is available, open its DMG, drag <strong>SoundsGoodSync.app</strong> onto the <strong>Applications</strong> shortcut, eject the disk image, and open the installed app from Applications. Do not replace a running companion or interrupt a transfer. If macOS blocks the app or the publisher is unexpected, stop and <a href="support.html">contact support</a>; do not disable security protections.</p>
-<p>This companion implements version 1 of the SoundsGood pairing, Wi-Fi transfer and USB folder protocols used by SoundsGood Full. The Mac exporter and Full’s USB byte verifier were checked together using synthetic audio. That check did not exercise a phone or a live Wi-Fi pairing session.</p>
-<p>The following setup instructions describe the implemented companion workflow for an already available, trusted copy. They are not a claim that a public release has been distributed.</p>
+<h2>Download and install</h2>
+<ol>
+<li><a href="https://github.com/sulaimonao/SoundsGood/releases/download/mac-sync-v0.3.1/SoundsGoodSync-0.3.1-build6-macOS-universal.zip">Download SoundsGood Sync 0.3.1 (build 6) for Mac</a>. The free ZIP contains the signed and notarized app for macOS 13 or later, on Intel and Apple silicon.</li>
+<li>To verify the download, save the <a href="https://github.com/sulaimonao/SoundsGood/releases/download/mac-sync-v0.3.1/SHA256SUMS.txt">SHA-256 checksum file</a> next to the ZIP. In Terminal, from that folder, run <code>shasum -a 256 -c SHA256SUMS.txt</code>. Continue only if the ZIP is reported as <code>OK</code>.</li>
+<li>Double-click the ZIP in Finder, move <strong>SoundsGoodSync.app</strong> to <strong>Applications</strong>, then open it from there. If replacing an older copy, finish any active transfer and quit that copy first. If macOS blocks the app or the publisher is unexpected, stop and <a href="support.html">contact support</a>; do not disable Gatekeeper.</li>
+</ol>
 <h2>Prepare your music</h2>
 <ol>
 <li>Use a Mac running macOS 13 or later and an Android device with the intended SoundsGood edition installed.</li>

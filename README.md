@@ -22,7 +22,7 @@ Your support helps shape the future of SoundsGood.
 
 ## SoundsGood Sync for Mac
 
-Transfer your selected music and playlists over local Wi-Fi or export a transfer folder for USB. The macOS companion will be free once approved for distribution. **There is no public installer yet.** See the [Mac setup and installation guide](docs/mac-companion.html).
+Transfer your selected music and playlists over local Wi-Fi or export a transfer folder for USB. [Download SoundsGood Sync 0.3.1 (build 6) for Mac](https://github.com/sulaimonao/SoundsGood/releases/download/mac-sync-v0.3.1/SoundsGoodSync-0.3.1-build6-macOS-universal.zip). The free ZIP contains a signed and notarized app for Intel and Apple silicon Macs running macOS 13 or later. [SHA-256 checksum](https://github.com/sulaimonao/SoundsGood/releases/download/mac-sync-v0.3.1/SHA256SUMS.txt) · [Installation and setup](https://sulaimonao.github.io/SoundsGood/mac-companion.html).
 
 ## Editions, privacy and support
 
