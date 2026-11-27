@@ -46,7 +46,7 @@ Discover a more personal music experience with smart playlists, listening statis
 
 ## Join the Google Play closed test
 
-1. [Contact me on LinkedIn](https://www.linkedin.com/in/akeemsulaimon/) with your Google Play email address. Please don’t post your email in a public issue.
+1. [Join our Discord community](https://discord.gg/7jYxyyqHm) and privately message the server owner with your Google Play email address to request beta access. Please don’t post your email in a public channel or GitHub issue.
 2. Once added, join the closed test on the web. Then open Google Play on Android using that same account to install SoundsGood Full.
 3. Stay enrolled for at least **14 consecutive days**, enjoy the app and share your feedback.
 
