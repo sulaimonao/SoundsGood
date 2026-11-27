@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "version": "0.3.1",
-  "build": 6,
+  "version": "0.3.2",
+  "build": 7,
   "minimumMacOS": "13.0",
-  "size": 2023295,
-  "sha256": "96385ab0a431fbf082f01da9cb9d3346e05a9ea2bcbaa8a2dc11a50fc40b8000",
-  "notes": "SoundsGood Sync 0.3.1 for macOS, build 6.",
-  "url": "https://github.com/sulaimonao/SoundsGood/releases/download/mac-sync-v0.3.1/SoundsGoodSync-0.3.1-build6-macOS-universal.zip"
+  "size": 2161206,
+  "sha256": "96b4980e410c683f187e60cf66bcf5c1cee33d4550a90e5ddb175aa044067333",
+  "notes": "Check for Updates in the SoundsGood Sync menu. Optional launch checks never download an update without approval.",
+  "url": "https://github.com/sulaimonao/SoundsGood/releases/download/mac-sync-v0.3.2/SoundsGoodSync-0.3.2-build7-macOS-universal.zip"
 }
