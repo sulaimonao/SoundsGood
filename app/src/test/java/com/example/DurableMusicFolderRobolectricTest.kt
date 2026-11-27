@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ProviderInfo
@@ -48,6 +49,8 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.shadows.ShadowStatFs
 import java.io.ByteArrayOutputStream
@@ -58,7 +61,7 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [36], shadows = [DurableMusicFolderRobolectricTest.FolderContentResolverShadow::class])
 class DurableMusicFolderRobolectricTest {
     @get:Rule val temp = TemporaryFolder()
 
@@ -66,6 +69,17 @@ class DurableMusicFolderRobolectricTest {
     private val selectedId = "primary:Music/Fixture"
     private val tree: Uri get() = DocumentsContract.buildTreeDocumentUri(authority, selectedId)
     private val grant = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+
+    @Implements(ContentResolver::class)
+    class FolderContentResolverShadow : ShadowContentResolver() {
+        @Implementation
+        protected override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
+            selectionArgs: Array<out String>?, sortOrder: String?): Cursor? {
+            if (uri.authority == "com.android.externalstorage.documents" && selection == null &&
+                selectionArgs == null && sortOrder == null) return super.query(uri, projection, null, null)
+            return super.query(uri, projection, selection, selectionArgs, sortOrder)
+        }
+    }
 
     /** A local Android DocumentsProvider with real file descriptors and changeable access. */
     private class LocalDocuments(val selectedId: String, folder: File) : DocumentsProvider() {

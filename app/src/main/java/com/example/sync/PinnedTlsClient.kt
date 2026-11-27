@@ -348,7 +348,7 @@ class PinnedTlsSyncTransport(
             if (aborted) throw abortFailure()
             if (isTlsFailure(e)) throw SyncTlsException("Mac TLS trust check failed. Pair again with the current sharing session.", e)
             if (e !is IOException) throw SyncProtocolException("Unexpected local transfer failure.", e)
-            val unexpectedEof = e is EOFException || (e is ProtocolException &&
+            val unexpectedEof = e is EOFException || e.message.equals("Premature EOF", ignoreCase = true) || (e is ProtocolException &&
                 e.message?.contains("unexpected end of stream", ignoreCase = true) == true)
             if (e is ProtocolException && !unexpectedEof) {
                 throw SyncProtocolException("Malformed HTTP response from the Mac companion.", e)

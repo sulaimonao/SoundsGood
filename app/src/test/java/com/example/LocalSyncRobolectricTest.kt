@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -20,6 +21,7 @@ import com.example.data.scanner.MediaStoreScanner
 import com.example.playback.MediaItemMapper
 import com.example.playback.PlaybackBus
 import com.example.playback.PlaybackClient
+import com.example.playback.PlaybackService
 import com.example.sync.AndroidWifiNetworkSelector
 import com.example.sync.LocalSyncManager
 import com.example.sync.PairingCredentials
@@ -48,6 +50,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -66,6 +69,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowConnectivityManager
 import org.robolectric.shadows.ShadowNetworkCapabilities
+import org.robolectric.shadows.ShadowStatFs
 import java.io.File
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -110,7 +114,9 @@ class LocalSyncRobolectricTest {
             syncedPlaylistDao = db.syncedPlaylistDao(),
             scanner = MediaStoreScanner(app)
         )
-        fileStorage = SyncFileStorage(tempFolder.newFolder("files"))
+        val filesDir = tempFolder.newFolder("files")
+        ShadowStatFs.registerStats(filesDir, 100000, 90000, 80000)
+        fileStorage = SyncFileStorage(filesDir)
         fileStorage.ensureDirectories()
         PlaybackBus.clearError()
     }
@@ -509,9 +515,12 @@ class LocalSyncRobolectricTest {
         manager.pairAndConnect(pairingLink())
         awaitReady(manager)
         manager.startSync()
-        startedSecond.await()
-        manager.cancelActiveSync()
-        releaseSecond.complete(Unit)
+        try {
+            awaitTransferStart(manager, startedSecond, "second track")
+            manager.cancelActiveSync()
+        } finally {
+            releaseSecond.complete(Unit)
+        }
         awaitResult(manager)
 
         assertEquals(SyncPhase.CANCELLED, manager.uiState.value.phase)
@@ -615,6 +624,7 @@ class LocalSyncRobolectricTest {
         app.localSyncManagerOverride = manager
 
         val launchIntent = Intent(Intent.ACTION_VIEW, Uri.parse(pairingLink())).setClass(app, MainActivity::class.java)
+        shadowOf(app).declareComponentUnbindable(ComponentName(app, PlaybackService::class.java))
         val activityController = Robolectric.buildActivity(MainActivity::class.java, launchIntent).create().start().resume()
         try {
             val activity = activityController.get()
@@ -626,7 +636,7 @@ class LocalSyncRobolectricTest {
             assertEquals(SyncPhase.READY, manager.uiState.value.phase)
 
             manager.startSync()
-            transferStarted.await()
+            awaitTransferStart(manager, transferStarted, "background cancellation track")
             assertTrue(manager.uiState.value.isTransferActive)
 
             // Simulate user backgrounding the app -> triggers onStop() with !isChangingConfigurations
@@ -638,6 +648,7 @@ class LocalSyncRobolectricTest {
             assertEquals(SyncPhase.CANCELLED, manager.uiState.value.phase)
             assertTrue(manager.uiState.value.errorMessage?.contains("background", ignoreCase = true) == true)
         } finally {
+            allowFinish.complete(Unit)
             activityController.destroy()
         }
     }
@@ -824,7 +835,7 @@ class LocalSyncRobolectricTest {
             val manager = LocalSyncManager(repository, fileStorage, transport, io, ui)
             manager.pairAndConnect(pairingLink()); awaitReady(manager)
             manager.startSync(true)
-            withTimeout(10_000) { started.await() }
+            awaitTransferStart(manager, started, "second track on worker dispatcher")
             manager.cancelActiveSync()
             awaitResult(manager)
             val outcome = manager.uiState.value.lastOutcome!!
@@ -848,6 +859,13 @@ class LocalSyncRobolectricTest {
     private suspend fun awaitReady(manager: LocalSyncManager) {
         withTimeout(10_000) { manager.uiState.first { it.phase == SyncPhase.READY || it.phase == SyncPhase.ERROR } }
         assertEquals(SyncPhase.READY, manager.uiState.value.phase)
+    }
+
+    private suspend fun awaitTransferStart(manager: LocalSyncManager, started: CompletableDeferred<Unit>, label: String) {
+        if (withTimeoutOrNull(10_000) { started.await() } == null) {
+            val state = manager.uiState.value
+            throw AssertionError("Timed out waiting for $label: phase=${state.phase}, error=${state.errorMessage}, outcome=${state.lastOutcome?.status}")
+        }
     }
 
     private suspend fun awaitResult(manager: LocalSyncManager) {

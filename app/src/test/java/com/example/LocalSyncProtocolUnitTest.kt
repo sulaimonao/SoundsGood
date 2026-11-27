@@ -12,7 +12,9 @@ import com.example.sync.SyncAuthExpiredException
 import com.example.sync.SyncManifestValidator
 import com.example.sync.SyncProtocolException
 import com.example.sync.SyncRevisionConflictException
+import com.example.sync.SyncTlsException
 import com.example.sync.SyncTrackDto
+import com.example.sync.SyncTrackTransferException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -61,7 +63,7 @@ class LocalSyncProtocolUnitTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
 
-    private val sampleToken = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456789_-" // 43 unpadded base64url chars
+    private val sampleToken = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456789_" // 43 unpadded base64url chars
     private val sampleFingerprint = "0123456789abcdef".repeat(4) // 64 lowercase hex chars
 
     @Test
@@ -448,13 +450,17 @@ class LocalSyncProtocolUnitTest {
             val truncErr = runCatching {
                 transport.downloadTrackAudio(creds, "rev-1", track, partFile) {}
             }.exceptionOrNull()
-            assertTrue(truncErr is SyncProtocolException)
+            assertTrue("Expected a track transfer failure, got $truncErr", truncErr is SyncTrackTransferException)
+            val transferError = truncErr as SyncTrackTransferException
+            assertEquals("cause=${transferError.cause}", "unexpected_eof", transferError.reason)
+            assertEquals(14L, transferError.receivedBytes)
+            assertEquals("not_checked", transferError.hashStatus)
 
             // Wrong fingerprint rejected during TLS handshake BEFORE sending HTTP request
             mode = "wrong_pin_server"
             val badCreds = loopbackCreds(server.port, ByteArray(32) { 0x11 })
             val pinErr = runCatching { transport.fetchManifest(badCreds) }.exceptionOrNull()
-            assertTrue("Expected SyncProtocolException on TLS pin mismatch, got $pinErr", pinErr is SyncProtocolException)
+            assertTrue("Expected SyncTlsException on TLS pin mismatch, got $pinErr", pinErr is SyncTlsException)
         } finally {
             server.close()
         }
